@@ -9,3 +9,5 @@ demo shit
 
 
 ![Steam Deck Player](public/steamdeck-player.png)
+
+![Music Browser](public/music-browser.png)
