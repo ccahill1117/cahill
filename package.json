@@ -11,12 +11,15 @@
     "type-check": "vue-tsc --build",
     "lint": "run-s lint:*",
     "lint:oxlint": "oxlint . --fix",
-    "lint:eslint": "eslint . --fix --cache"
+    "lint:eslint": "eslint . --fix --cache",
+    "scan-library": "node scripts/scan-library.mjs"
   },
   "dependencies": {
     "@types/three": "^0.184.1",
+    "howler": "^2.2.4",
     "pinia": "^3.0.4",
     "three": "^0.184.0",
+    "video.js": "^8.23.7",
     "vue": "^3.5.32",
     "vue-router": "^5.0.4"
   },
@@ -31,6 +34,7 @@
     "eslint-plugin-oxlint": "~1.60.0",
     "eslint-plugin-vue": "~10.8.0",
     "jiti": "^2.6.1",
+    "music-metadata": "^11.12.3",
     "npm-run-all2": "^8.0.4",
     "oxlint": "~1.60.0",
     "typescript": "~6.0.0",
