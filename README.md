@@ -1,4 +1,4 @@
-demo shit
+demo
 
   Adding music to the library
 
