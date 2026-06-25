@@ -19,15 +19,17 @@ const videos = ref<VideoEntry[]>([])
 const loading = ref(true)
 const error   = ref<string | null>(null)
 
+const LIBRARY_URL = `${import.meta.env.VITE_CDN_URL ?? 'https://cahill-media-library.s3.amazonaws.com'}/library.json`
+
 onMounted(async () => {
   try {
-    const res = await fetch('/library.json')
+    const res = await fetch(LIBRARY_URL)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     music.value  = data.music  ?? []
     videos.value = data.videos ?? []
   } catch (e) {
-    error.value = 'Could not load library.json'
+    error.value = 'Could not load library'
     console.error(e)
   } finally {
     loading.value = false

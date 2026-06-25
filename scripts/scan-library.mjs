@@ -2,145 +2,137 @@
 /**
  * scan-library.mjs
  *
- * Scans public/media/music and public/media/video, reads ID3 tags where
- * possible, and writes public/library.json.
+ * Lists objects in the cahill-media-library S3 bucket, builds library entries
+ * from the key path, and writes public/library.json.
  *
  * Usage:
+ *   npm run scan-library
+ *   # or
  *   node scripts/scan-library.mjs
  *
- * For richer metadata (ID3 tags from MP3/FLAC/etc) make sure music-metadata
- * is installed:
- *   npm install --save-dev music-metadata
+ * Requires AWS credentials with s3:ListBucket on cahill-media-library.
+ * Run `aws configure` if you haven't already.
  *
- * Drop media files into:
- *   public/media/music/   ← MP3, FLAC, AAC, WAV, OGG, M4A
- *   public/media/video/   ← MP4, MKV, MOV, AVI, WEBM, M4V
+ * Expected key structure (either works):
+ *   music/Artist/Album/01 - Track.mp3
+ *   Artist/Album/01 - Track.mp3
  *
- * Sub-folders are supported. Artist/album folder structure is respected:
- *   public/media/music/Radiohead/OK Computer/01 - Airbag.mp3
+ * For video:
+ *   video/Movie Title (2024).mp4
+ *   video/Show/S01E01 - Episode.mkv
  */
 
-import { readdir, writeFile } from 'node:fs/promises'
-import { join, extname, basename, relative, dirname } from 'node:path'
+import { writeFile } from 'node:fs/promises'
+import { join, extname, basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync } from 'node:fs'
+import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
-const ROOT       = join(__dirname, '..')
-const PUBLIC     = join(ROOT, 'public')
-const MUSIC_DIR  = join(PUBLIC, 'media', 'music')
-const VIDEO_DIR  = join(PUBLIC, 'media', 'video')
-const OUT        = join(PUBLIC, 'library.json')
+const ROOT = join(__dirname, '..')
+const OUT  = join(ROOT, 'public', 'library.json')
+
+const BUCKET   = 'cahill-media-library'
+const BASE_URL = `https://${BUCKET}.s3.amazonaws.com`
 
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.aac', '.wav', '.ogg', '.m4a'])
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'])
 
+const s3 = new S3Client({})
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-async function walk(dir, exts) {
-  const results = []
-  if (!existsSync(dir)) return results
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) results.push(...await walk(full, exts))
-    else if (exts.has(extname(entry.name).toLowerCase())) results.push(full)
-  }
-  return results
-}
-
-function toPublicPath(abs) {
-  return '/' + relative(PUBLIC, abs).replace(/\\/g, '/')
-}
 
 function slugify(str) {
   return str.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
 }
 
-/** Best-effort parse from folder structure: Artist/Album/Track.mp3 */
-function parseFromPath(file) {
-  const parts = relative(MUSIC_DIR, dirname(file)).split(/[\\/]/).filter(Boolean)
-  const name  = basename(file, extname(file)).replace(/^\d+[\s.\-_]+/, '') // strip track number
+/** List all keys in the bucket, paginating as needed. */
+async function listAllKeys() {
+  const keys = []
+  let token
+  do {
+    const res = await s3.send(new ListObjectsV2Command({
+      Bucket: BUCKET,
+      ContinuationToken: token,
+    }))
+    for (const obj of res.Contents ?? []) {
+      if (obj.Key) keys.push(obj.Key)
+    }
+    token = res.NextContinuationToken
+  } while (token)
+  return keys
+}
+
+/**
+ * Parse artist/album/title from an S3 key.
+ * Strips a leading "music/" prefix if present, then reads folder depth:
+ *   Artist/Album/track  → { artist, album, title }
+ *   Artist/track        → { artist, album: artist, title }
+ *   track               → { artist: 'Unknown', album: 'Unknown', title }
+ */
+function parseMusicKey(key) {
+  // strip optional leading "music/" segment
+  const stripped = key.replace(/^music\//i, '')
+  const dir   = dirname(stripped)
+  const file  = basename(stripped, extname(stripped)).replace(/^\d+[\s.\-_]+/, '')
+  const parts = dir === '.' ? [] : dir.split('/').filter(Boolean)
   return {
     artist: parts[0] ?? 'Unknown Artist',
-    album:  parts[1] ?? 'Unknown Album',
-    title:  name,
+    album:  parts[1] ?? parts[0] ?? 'Unknown Album',
+    title:  file,
   }
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  // Optional: richer metadata via music-metadata
-  let mm = null
+  console.log(`Scanning s3://${BUCKET} …\n`)
+
+  let keys
   try {
-    mm = await import('music-metadata')
-    console.log('✓ music-metadata available — reading ID3 tags\n')
-  } catch {
-    console.log('ℹ  music-metadata not found — falling back to filename/folder parsing')
-    console.log('   For ID3 tags: npm install --save-dev music-metadata\n')
+    keys = await listAllKeys()
+  } catch (err) {
+    console.error('Failed to list bucket. Check your AWS credentials and region.')
+    console.error(err.message)
+    process.exit(1)
   }
 
-  // ── Music ────────────────────────────────────────────────────────────────
+  console.log(`  Found ${keys.length} objects\n`)
 
-  const musicFiles = await walk(MUSIC_DIR, AUDIO_EXTS)
-  const music = []
-
-  for (const file of musicFiles) {
-    const fromPath = parseFromPath(file)
-    let entry = {
-      id:       `music_${slugify(fromPath.artist)}_${slugify(fromPath.title)}`,
-      title:    fromPath.title,
-      artist:   fromPath.artist,
-      album:    fromPath.album,
-      year:     null,
-      genre:    null,
-      duration: 0,
-      src:      toPublicPath(file),
-      artwork:  null,
-    }
-
-    if (mm) {
-      try {
-        const meta = await mm.parseFile(file, { duration: true })
-        const c = meta.common
-        entry = {
-          ...entry,
-          title:    c.title    ?? fromPath.title,
-          artist:   (c.artist ?? c.albumartist) ?? fromPath.artist,
-          album:    c.album    ?? fromPath.album,
-          year:     c.year     ?? null,
-          genre:    c.genre?.[0] ?? null,
-          duration: Math.round(meta.format.duration ?? 0),
-        }
-      } catch {
-        console.warn(`  ⚠  Could not parse tags: ${basename(file)}`)
-      }
-    }
-
-    music.push(entry)
-    console.log(`  ♪  ${entry.artist} — ${entry.title}`)
-  }
-
-  // ── Video ────────────────────────────────────────────────────────────────
-
-  const videoFiles = await walk(VIDEO_DIR, VIDEO_EXTS)
+  const music  = []
   const videos = []
 
-  for (const file of videoFiles) {
-    const name = basename(file, extname(file))
-    videos.push({
-      id:        `video_${slugify(name)}`,
-      title:     name,
-      type:      'movie',    // 'movie' | 'episode' | 'clip'
-      year:      null,
-      duration:  0,
-      src:       toPublicPath(file),
-      thumbnail: null,
-    })
-    console.log(`  ▶  ${name}`)
-  }
+  for (const key of keys) {
+    const ext = extname(key).toLowerCase()
+    const url = `${BASE_URL}/${encodeURIComponent(key).replace(/%2F/g, '/')}`
 
-  // ── Write ────────────────────────────────────────────────────────────────
+    if (AUDIO_EXTS.has(ext)) {
+      const { artist, album, title } = parseMusicKey(key)
+      music.push({
+        id:       `music_${slugify(artist)}_${slugify(title)}`,
+        title,
+        artist,
+        album,
+        year:     null,
+        genre:    null,
+        duration: 0,
+        src:      url,
+        artwork:  null,
+      })
+      console.log(`  ♪  ${artist} — ${title}`)
+    } else if (VIDEO_EXTS.has(ext)) {
+      const name = basename(key, ext)
+      videos.push({
+        id:        `video_${slugify(name)}`,
+        title:     name,
+        type:      'movie',
+        year:      null,
+        duration:  0,
+        src:       url,
+        thumbnail: null,
+      })
+      console.log(`  ▶  ${name}`)
+    }
+  }
 
   await writeFile(OUT, JSON.stringify({ music, videos }, null, 2))
   console.log(`\n✓  Wrote library.json — ${music.length} tracks · ${videos.length} videos`)
