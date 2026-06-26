@@ -11,3 +11,9 @@ demo
 ![Steam Deck Player](public/steamdeck-player.png)
 
 ![Music Browser](public/music-browser.png)
+
+
+
+  # upload command 
+
+  aws s3 sync /Volumes/ChrisLacie/Music s3://cahill-media-library/music/ --exclude ".*" --only-show-errors 2>&1 | tee ~/music-upload.log
