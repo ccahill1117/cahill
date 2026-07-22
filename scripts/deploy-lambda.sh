@@ -124,14 +124,22 @@ aws s3api put-bucket-notification-configuration \
     }]
   }"
 
-# ── 5. CORS ───────────────────────────────────────────────────────────────────
+# ── 5. Block public S3 access ─────────────────────────────────────────────────
+
+echo "==> Blocking public S3 access (CloudFront OAC handles reads)"
+aws s3api put-public-access-block \
+  --bucket "$BUCKET" \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+
+# ── 6. CORS ───────────────────────────────────────────────────────────────────
 
 echo "==> Setting bucket CORS"
 aws s3api put-bucket-cors \
   --bucket "$BUCKET" \
   --cors-configuration "file://$SCRIPT_DIR/bucket-cors.json"
 
-# ── 6. Initial scan ───────────────────────────────────────────────────────────
+# ── 7. Initial scan ───────────────────────────────────────────────────────────
 
 echo "==> Triggering initial scan (async)…"
 aws lambda invoke \

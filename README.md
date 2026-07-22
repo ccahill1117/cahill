@@ -8,7 +8,7 @@ demo
   3. Refresh the browser — tracks appear instantly
 
 
-![Steam Deck Player](public/steamdeck-player.png)
+<!-- ![Steam Deck Player](public/steamdeck-player.png) -->
 
 ![Music Browser](public/music-browser.png)
 

@@ -37,7 +37,27 @@ fi
 
 echo "   CORS policy: $CORS_POLICY_ID"
 
-# ── 2. CloudFront distribution ────────────────────────────────────────────────
+# ── 2. CloudFront Origin Access Control ──────────────────────────────────────
+
+echo "==> Creating Origin Access Control"
+OAC_ID="$(aws cloudfront create-origin-access-control \
+  --origin-access-control-config "{
+    \"Name\": \"cahill-oac\",
+    \"OriginAccessControlOriginType\": \"s3\",
+    \"SigningBehavior\": \"always\",
+    \"SigningProtocol\": \"sigv4\"
+  }" \
+  --query 'OriginAccessControl.Id' --output text 2>/dev/null)" || true
+
+if [[ -z "$OAC_ID" ]]; then
+  OAC_ID="$(aws cloudfront list-origin-access-controls \
+    --query "OriginAccessControlList.Items[?Name=='cahill-oac'].Id" \
+    --output text)"
+fi
+
+echo "   OAC ID: $OAC_ID"
+
+# ── 3. CloudFront distribution ────────────────────────────────────────────────
 
 echo "==> Creating CloudFront distribution (this takes ~2 min to deploy globally)"
 
@@ -53,7 +73,8 @@ DIST_JSON="$(aws cloudfront create-distribution --distribution-config "{
     \"Items\": [{
       \"Id\": \"s3-cahill\",
       \"DomainName\": \"${CF_ORIGIN}\",
-      \"S3OriginConfig\": {\"OriginAccessIdentity\": \"\"}
+      \"S3OriginConfig\": {\"OriginAccessIdentity\": \"\"},
+      \"OriginAccessControlId\": \"${OAC_ID}\"
     }]
   },
   \"DefaultCacheBehavior\": {
@@ -84,7 +105,32 @@ DIST_ID="$(echo "$DIST_JSON"   | python3 -c "import sys,json; d=json.load(sys.st
 echo "   Domain: $CF_DOMAIN"
 echo "   Dist ID: $DIST_ID"
 
-# ── 3. Update Lambda IAM to allow CF invalidations ───────────────────────────
+# ── 4. Restrict S3 bucket to CloudFront only ──────────────────────────────────
+
+echo "==> Locking down S3 bucket to CloudFront only"
+aws s3api put-public-access-block \
+  --bucket "$BUCKET" \
+  --public-access-block-configuration \
+    "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
+
+aws s3api put-bucket-policy \
+  --bucket "$BUCKET" \
+  --policy "{
+    \"Version\": \"2012-10-17\",
+    \"Statement\": [{
+      \"Effect\": \"Allow\",
+      \"Principal\": {\"Service\": \"cloudfront.amazonaws.com\"},
+      \"Action\": \"s3:GetObject\",
+      \"Resource\": \"arn:aws:s3:::${BUCKET}/*\",
+      \"Condition\": {
+        \"StringEquals\": {
+          \"AWS:SourceArn\": \"arn:aws:cloudfront::${ACCOUNT_ID}:distribution/${DIST_ID}\"
+        }
+      }
+    }]
+  }"
+
+# ── 5. Update Lambda IAM to allow CF invalidations ───────────────────────────
 
 echo "==> Updating Lambda IAM policy"
 aws iam put-role-policy \
@@ -114,7 +160,7 @@ aws iam put-role-policy \
     ]
   }"
 
-# ── 4. Update Lambda env vars ─────────────────────────────────────────────────
+# ── 6. Update Lambda env vars ─────────────────────────────────────────────────
 
 echo "==> Updating Lambda environment"
 aws lambda update-function-configuration \
@@ -123,14 +169,14 @@ aws lambda update-function-configuration \
   --environment "Variables={BUCKET_NAME=$BUCKET,CLOUDFRONT_DOMAIN=$CF_DOMAIN,DISTRIBUTION_ID=$DIST_ID}" \
   > /dev/null
 
-# ── 5. Write frontend env ─────────────────────────────────────────────────────
+# ── 7. Write frontend env ─────────────────────────────────────────────────────
 
 echo "==> Writing .env.local"
 cat > "$ROOT/.env.local" <<EOF
 VITE_CDN_URL=https://${CF_DOMAIN}
 EOF
 
-# ── 6. Initial scan via Lambda ────────────────────────────────────────────────
+# ── 8. Initial scan via Lambda ────────────────────────────────────────────────
 
 echo "==> Triggering library scan (async)…"
 aws lambda invoke \

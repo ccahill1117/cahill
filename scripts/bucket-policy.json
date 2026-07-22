@@ -3,9 +3,14 @@
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": "*",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::cahill-media-library/*"
+      "Resource": "arn:aws:s3:::cahill-media-library/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceArn": "arn:aws:cloudfront::<ACCOUNT_ID>:distribution/<DIST_ID>"
+        }
+      }
     }
   ]
 }
