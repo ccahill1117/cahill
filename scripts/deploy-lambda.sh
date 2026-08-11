@@ -115,13 +115,24 @@ aws lambda add-permission \
   --region "$REGION" 2>/dev/null || echo "   (permission already exists)"
 
 echo "==> Configuring S3 event notification"
+# Scoped to music/ and video/ only — the scanner writes library.json back to the
+# bucket root on every run, so an unscoped trigger recurses on its own output
+# (this previously tripped Lambda's recursive-loop protection).
 aws s3api put-bucket-notification-configuration \
   --bucket "$BUCKET" \
   --notification-configuration "{
-    \"LambdaFunctionConfigurations\":[{
-      \"LambdaFunctionArn\":\"${LAMBDA_ARN}\",
-      \"Events\":[\"s3:ObjectCreated:*\"]
-    }]
+    \"LambdaFunctionConfigurations\":[
+      {
+        \"LambdaFunctionArn\":\"${LAMBDA_ARN}\",
+        \"Events\":[\"s3:ObjectCreated:*\"],
+        \"Filter\":{\"Key\":{\"FilterRules\":[{\"Name\":\"prefix\",\"Value\":\"music/\"}]}}
+      },
+      {
+        \"LambdaFunctionArn\":\"${LAMBDA_ARN}\",
+        \"Events\":[\"s3:ObjectCreated:*\"],
+        \"Filter\":{\"Key\":{\"FilterRules\":[{\"Name\":\"prefix\",\"Value\":\"video/\"}]}}
+      }
+    ]
   }"
 
 # ── 5. Block public S3 access ─────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import PlayerBar from '../components/PlayerBar.vue'
 import VideoPlayerModal, { type VideoItem } from '../components/VideoPlayerModal.vue'
 import { useAudioPlayer, fmtTime, type Track } from '../composables/useAudioPlayer'
+import { useVideoUpload } from '../composables/useVideoUpload'
 
 const { play, currentTrack, isPlaying } = useAudioPlayer()
 
@@ -21,20 +22,45 @@ const error   = ref<string | null>(null)
 
 const LIBRARY_URL = `${import.meta.env.VITE_CDN_URL ?? 'https://cahill-media-library.s3.amazonaws.com'}/library.json`
 
-onMounted(async () => {
+async function loadLibrary() {
   try {
-    const res = await fetch(LIBRARY_URL)
+    const res = await fetch(LIBRARY_URL, { cache: 'no-store' })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     music.value  = data.music  ?? []
     videos.value = data.videos ?? []
+    error.value = null
   } catch (e) {
     error.value = 'Could not load library'
     console.error(e)
   } finally {
     loading.value = false
   }
-})
+}
+
+onMounted(loadLibrary)
+
+// ─── Video upload ────────────────────────────────────────────────────────────
+
+const { upload, uploading, progress, error: uploadError } = useVideoUpload()
+const fileInput = ref<HTMLInputElement | null>(null)
+const uploadNotice = ref<string | null>(null)
+
+function pickVideoFile() {
+  fileInput.value?.click()
+}
+
+async function onFileSelected(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0]
+  ;(e.target as HTMLInputElement).value = ''
+  if (!file) return
+
+  uploadNotice.value = null
+  const ok = await upload(file)
+  if (ok) {
+    uploadNotice.value = `Uploaded "${file.name}" — it'll appear here once the library rescans (~30–90s). Use Refresh to check.`
+  }
+}
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
@@ -136,13 +162,31 @@ const filteredVideos = computed(() =>
         <h1 class="section-title">
           {{ { songs: 'Songs', albums: 'Albums', artists: 'Artists', videos: 'Videos' }[activeSection] }}
         </h1>
-        <input
-          v-model="query"
-          type="search"
-          class="search-input"
-          placeholder="Search…"
-        />
+        <div class="header-actions">
+          <template v-if="activeSection === 'videos'">
+            <input
+              ref="fileInput"
+              type="file"
+              accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v"
+              class="visually-hidden"
+              @change="onFileSelected"
+            />
+            <button class="refresh-btn" title="Refresh library" @click="loadLibrary">↻</button>
+            <button class="upload-btn" :disabled="uploading" @click="pickVideoFile">
+              {{ uploading ? `Uploading… ${progress}%` : '⬆ Upload video' }}
+            </button>
+          </template>
+          <input
+            v-model="query"
+            type="search"
+            class="search-input"
+            placeholder="Search…"
+          />
+        </div>
       </div>
+
+      <div v-if="uploadError" class="state-msg error upload-msg">{{ uploadError }}</div>
+      <div v-else-if="uploadNotice" class="state-msg upload-msg">{{ uploadNotice }}</div>
 
       <!-- Loading / error / empty states -->
       <div v-if="loading" class="state-msg">Loading library…</div>
@@ -392,6 +436,48 @@ const filteredVideos = computed(() =>
 }
 .search-input::placeholder { color: #48484a; }
 .search-input:focus { border-color: #636366; }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.upload-btn,
+.refresh-btn {
+  background: #2c2c2e;
+  border: 1px solid #3a3a3c;
+  border-radius: 8px;
+  color: #fff;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+.upload-btn:hover:not(:disabled),
+.refresh-btn:hover { background: #3a3a3c; border-color: #48484a; }
+.upload-btn:disabled { opacity: 0.6; cursor: default; }
+
+.refresh-btn {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.95rem;
+}
+
+.upload-msg {
+  padding: 0.6rem 2rem 0;
+  font-size: 0.82rem;
+}
 
 /* ── State messages ── */
 .state-msg {

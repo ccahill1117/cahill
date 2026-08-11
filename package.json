@@ -14,7 +14,8 @@
     "lint:eslint": "eslint . --fix --cache",
     "scan-library": "aws lambda invoke --function-name cahill-library-scanner --region us-west-2 --invocation-type Event /tmp/scan-out.json && echo 'Scan triggered — library.json ready in ~30s'",
     "deploy-lambda": "bash scripts/deploy-lambda.sh",
-    "deploy-cloudfront": "bash scripts/deploy-cloudfront.sh"
+    "deploy-cloudfront": "bash scripts/deploy-cloudfront.sh",
+    "deploy-upload-presign": "bash scripts/deploy-upload-presign.sh"
   },
   "dependencies": {
     "@types/three": "^0.184.1",
